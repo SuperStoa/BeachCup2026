@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BeachCup 2025 – Live Score</title>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <style>
+        :root { --blue: #003366; --sand: #fdf5e6; --rasen: #eaffea; --accent: #ff9900; }
+        body { font-family: sans-serif; margin: 0; padding: 10px; background: #f0f4f8; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 15px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h1 { color: var(--blue); text-align: center; margin-bottom: 5px; }
+        .info-box { background: var(--blue); color: white; padding: 10px; border-radius: 5px; text-align: center; margin-bottom: 15px; font-size: 0.85em; }
+        
+        .ranking-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
+        table { border-collapse: collapse; width: 100%; font-size: 0.85em; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+        th { background: #eee; color: var(--blue); }
+        
+        .round-row { background: #444 !important; color: white; font-weight: bold; }
+        .feld-sand { background-color: var(--sand); }
+        .feld-rasen { background-color: var(--rasen); }
+        
+        input { width: 40px; padding: 5px; text-align: center; border: 1px solid #999; border-radius: 4px; font-weight: bold; font-size: 1.1em; }
+        .btn-save { background: var(--accent); color: white; border: none; padding: 15px; border-radius: 6px; width: 100%; cursor: pointer; font-size: 1.2em; font-weight: bold; margin-top: 15px; }
+        #status { text-align: center; margin-top: 10px; font-weight: bold; color: #006600; }
+        
+        .diff-pos { color: green; font-size: 0.8em; }
+        .diff-neg { color: red; font-size: 0.8em; }
+
+        @media (max-width: 600px) { .ranking-grid { grid-template-columns: 1fr; } .hide-mobile { display: none; } }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🏐 BeachCup 2025</h1>
+    <div class="info-box">
+        ⏱️ 12 Min. Spielzeit | 3 Min. Pause | Sortierung: Siege > Balldifferenz
+    </div>
+
+    <div class="ranking-grid">
+        <div>
+            <h3>🏆 Gruppe A</h3>
+            <table>
+                <thead><tr><th>Team</th><th>Siege</th><th>Bälle</th><th>Diff</th></tr></thead>
+                <tbody id="ranking-A"></tbody>
+            </table>
+        </div>
+        <div>
+            <h3>🏆 Gruppe B</h3>
+            <table>
+                <thead><tr><th>Team</th><th>Siege</th><th>Bälle</th><th>Diff</th></tr></thead>
+                <tbody id="ranking-B"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <h3>📅 Spielplan (15-Min-Takt)</h3>
+    <div style="overflow-x:auto;">
+        <table>
+            <thead>
+                <tr><th>Feld</th><th>Team A</th><th>Pkt A</th><th>vs</th><th>Pkt B</th><th>Team B</th></tr>
+            </thead>
+            <tbody id="spielplan-body"></tbody>
+        </table>
+    </div>
+    
+    <button class="btn-save" onclick="saveAll()">💾 ERGEBNISSE SPEICHERN & TABELLE AKTUALISIEREN</button>
+    <div id="status"></div>
+</div>
+
+<script>
+    // DEINE FIREBASE CONFIG (bleibt gleich)
+    const firebaseConfig = {
+        apiKey: "AIzaSyAUXIX2Si62HBTshapPgUXZiBjBEjBKIYE",
+        authDomain: "beachcup2026.firebaseapp.com",
+        projectId: "beachcup2026",
+        storageBucket: "beachcup2026.firebasestorage.app",
+        messagingSenderId: "1034428632734",
+        appId: "1:1034428632734:web:a7a0a61f53ab13037cb58f",
+        measurementId: "G-8TYXXCV3F3"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    const teamsA = ["Team 1", "Team 2", "Team 3", "Team 4", "Team 5", "Team 6"];
+    const teamsB = ["Team 7", "Team 8", "Team 9", "Team 10", "Team 11", "Team 12"];
+    const seq = [[0,1], [2,3], [4,5], [0,2], [1,3], [2,5], [0,4], [1,2], [3,5], [0,3], [1,4], [2,4], [0,5], [1,5], [3,4]];
+
+    function init() {
+        db.collection("cup2025").doc("results").onSnapshot((doc) => {
+            const data = doc.exists ? doc.data() : {};
+            let html = "";
+            let stats = {};
+            [...teamsA, ...teamsB].forEach(n => stats[n] = {win:0, plus:0, minus:0});
+
+            for(let i=0; i<15; i++) {
+                let startTime = new Date(2025,0,1,9,30); 
+                startTime.setMinutes(startTime.getMinutes() + (i*15));
+                let tStr = startTime.toTimeString().substring(0,5);
+                
+                html += `<tr class="round-row"><td colspan="6">Runde ${i+1} — Start: ${tStr} Uhr</td></tr>`;
+                
+                let matches = [];
+                if(i%2===0) {
+                    matches.push({f: "Sand", t1: teamsA[seq[i][0]], t2: teamsA[seq[i][1]], id: i*2});
+                    matches.push({f: "Rasen", t1: teamsB[seq[i][0]], t2: teamsB[seq[i][1]], id: i*2+1});
+                } else {
+                    matches.push({f: "Sand", t1: teamsB[seq[i][0]], t2: teamsB[seq[i][1]], id: i*2});
+                    matches.push({f: "Rasen", t1: teamsA[seq[i][0]], t2: teamsA[seq[i][1]], id: i*2+1});
+                }
+
+                matches.forEach(g => {
+                    let r = data[`m${g.id}`] || {pa:0, pb:0};
+                    
+                    // Ball-Statistik (immer addieren wenn Felder nicht leer)
+                    if(r.pa > 0 || r.pb > 0) {
+                        stats[g.t1].plus += r.pa;
+                        stats[g.t1].minus += r.pb;
+                        stats[g.t2].plus += r.pb;
+                        stats[g.t2].minus += r.pa;
+                        if(r.pa > r.pb) stats[g.t1].win++; else if(r.pb > r.pa) stats[g.t2].win++;
+                    }
+
+                    html += `<tr class="${g.f === 'Sand' ? 'feld-sand' : 'feld-rasen'}">
+                        <td><strong>${g.f}</strong></td><td>${g.t1}</td>
+                        <td><input type="number" id="m${g.id}pa" value="${r.pa}"></td>
+                        <td>vs</td>
+                        <td><input type="number" id="m${g.id}pb" value="${r.pb}"></td>
+                        <td>${g.t2}</td>
+                    </tr>`;
+                });
+            }
+            document.getElementById('spielplan-body').innerHTML = html;
+            updateRanking(stats);
+        });
+    }
+
+    function updateRanking(stats) {
+        const render = (list, target) => {
+            const sorted = list.map(n => ({
+                name: n, 
+                win: stats[n].win, 
+                plus: stats[n].plus, 
+                minus: stats[n].minus,
+                diff: stats[n].plus - stats[n].minus
+            })).sort((a,b) => {
+                if(b.win !== a.win) return b.win - a.win; // Erst Siege
+                return b.diff - a.diff; // Dann Balldifferenz
+            });
+
+            document.getElementById(target).innerHTML = sorted.map(o => `
+                <tr>
+                    <td>${o.name}</td>
+                    <td><strong>${o.win}</strong></td>
+                    <td><small>${o.plus}:${o.minus}</small></td>
+                    <td class="${o.diff >= 0 ? 'diff-pos' : 'diff-neg'}">${o.diff > 0 ? '+' : ''}${o.diff}</td>
+                </tr>
+            `).join('');
+        };
+        render(teamsA, 'ranking-A');
+        render(teamsB, 'ranking-B');
+    }
+
+    async function saveAll() {
+        let data = {};
+        for(let i=0; i<30; i++) {
+            const elA = document.getElementById(`m${i}pa`);
+            if(!elA) continue;
+            data[`m${i}`] = {
+                pa: parseInt(elA.value) || 0,
+                pb: parseInt(document.getElementById(`m${i}pb`).value) || 0
+            };
+        }
+        document.getElementById('status').innerText = "⏳ Speichere...";
+        try {
+            await db.collection("cup2025").doc("results").set(data);
+            document.getElementById('status').innerText = "✅ Alles aktuell!";
+        } catch(e) { document.getElementById('status').innerText = "❌ Fehler!"; }
+        setTimeout(() => document.getElementById('status').innerText = "", 2000);
+    }
+    window.onload = init;
+</script>
+</body>
+</html>
